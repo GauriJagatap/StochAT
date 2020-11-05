@@ -22,7 +22,7 @@ def trades_loss(model,
                 epsilon=0.031,
                 perturb_steps=10,
                 beta=1.0,
-                distance='l_inf'):
+                distance='l_2'):
     # define KL-loss
     criterion_kl = nn.KLDivLoss(size_average=False)
     model.eval()
@@ -30,7 +30,7 @@ def trades_loss(model,
     # generate adversarial example
     x_adv = x_natural.detach() + 0.001 * torch.randn(x_natural.shape).cuda().detach()
     if distance == 'l_inf':
-        for _ in range(perturb_steps):
+        for p in range(int(perturb_steps)):
             x_adv.requires_grad_()
             with torch.enable_grad():
                 loss_kl = criterion_kl(F.log_softmax(model(x_adv), dim=1),
@@ -44,9 +44,9 @@ def trades_loss(model,
         delta = Variable(delta.data, requires_grad=True)
 
         # Setup optimizers
-        optimizer_delta = optim.SGD([delta], lr=epsilon / perturb_steps * 2)
+        optimizer_delta = optim.SGD([delta], lr=epsilon / int(perturb_steps) * 2)
 
-        for _ in range(perturb_steps):
+        for p in range(int(perturb_steps)):
             adv = x_natural + delta
 
             # optimize
@@ -55,6 +55,8 @@ def trades_loss(model,
                 loss = (-1) * criterion_kl(F.log_softmax(model(adv), dim=1),
                                            F.softmax(model(x_natural), dim=1))
             loss.backward()
+            #print('inner loss:',loss.item())
+
             # renorming gradient
             grad_norms = delta.grad.view(batch_size, -1).norm(p=2, dim=1)
             delta.grad.div_(grad_norms.view(-1, 1, 1, 1))
