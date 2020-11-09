@@ -3,6 +3,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+class Flatten(nn.Module):
+    def forward(self, x):
+        return x.view(x.shape[0], -1)
+    
 class Net(nn.Module):
     def __init__(self):
         super(Net, self).__init__()
@@ -55,4 +59,18 @@ class Net_binary(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.dropout(x, training=self.training)
         x = self.fc2(x)
+        return x
+
+class model_cnn(nn.Module):
+    def __init__(self):
+        super(model_cnn, self).__init__()           
+        self.model_cnn = nn.Sequential(nn.Conv2d(1, 32, 3, padding=1), nn.ReLU(),
+                          nn.Conv2d(32, 32, 3, padding=1, stride=2), nn.ReLU(),
+                              nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(),
+                              nn.Conv2d(64, 64, 3, padding=1, stride=2), nn.ReLU(),
+                              Flatten(),
+                              nn.Linear(7*7*64, 100), nn.ReLU(),
+                              nn.Linear(100, 10))
+    def forward(self,x):
+        x = self.model_cnn(x)
         return x
