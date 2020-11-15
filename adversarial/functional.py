@@ -7,6 +7,18 @@ import numpy as np
 
 from utils import project, generate_misclassified_sample, random_perturbation
 
+def infnorm(x):
+    infn = torch.max(torch.abs(x))
+    return infn
+
+def indicator(x):
+    ind = torch.zeros_like(x)
+    maxval,maxind = torch.topk(x.view(-1),3000)
+    print(maxval[-1])
+    indflat = ind.view(-1)
+    indflat[maxind]= 1
+    ind = torch.reshape(ind,x.shape)
+    return ind 
 
 def fgsm(model: Module,
          x: torch.Tensor,
@@ -51,7 +63,9 @@ def _iterative_gradient(model: Module,
                         step_norm: Union[str, float],
                         y_target: torch.Tensor = None,
                         random: bool = False,
-                        clamp: Tuple[float, float] = (0, 1)) -> torch.Tensor:
+                        clamp: Tuple[float, float] = (0, 1),
+                        debug: bool = False
+                       ) -> torch.Tensor:
     """Base function for PGD and iterated FGSM
 
     Args:
@@ -88,6 +102,8 @@ def _iterative_gradient(model: Module,
         with torch.no_grad():
             if step_norm == 'inf':
                 gradients = _x_adv.grad.sign() * step
+                
+                    
             else:
                 # .view() assumes batched image data as 4D tensor
                 gradients = _x_adv.grad * step / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
@@ -105,11 +121,13 @@ def _iterative_gradient(model: Module,
                 x_adv = torch.clamp(x_adv,0,1)
                 #print('max x:',x_adv.max())
                 #print('min x:', x_adv.min())
-
-
+                 
+        if debug:
+            print('inf norm of update:',infnorm(x-x_adv),'eps=',eps)
         # Project back into l_norm ball and correct range
         x_adv = project(x, x_adv, norm, eps).clamp(*clamp)
-
+        if debug:
+            print('inf norm of project:',infnorm(x-x_adv),'eps=',eps)
     return x_adv.detach()
 
 
@@ -126,7 +144,9 @@ def _langevin_samples(model: Module,
                         ep: float,
                         y_target: torch.Tensor = None,
                         random: bool = False,
-                        clamp: Tuple[float, float] = (0, 1)
+                        clamp: Tuple[float, float] = (0, 1),
+                        debug: bool = False
+                      
                         ) -> torch.Tensor:
     
     x_adv = x.clone().detach().requires_grad_(True).to(x.device) # load x_adv (samples from p(x')) as x itself and modify it to form init 
@@ -134,11 +154,9 @@ def _langevin_samples(model: Module,
 
     if random:
         x_adv = random_perturbation(x_adv, norm, eps) # initialize x' by adding bounded noise to x
-        pred = model(x_adv)
-        lfx = loss_fn(pred, y_target if targeted else y)
         
-    _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
     for i in range(k): # Langevin updates 
+        _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
 
         prediction = model(_x_adv) # f(x')
         loss = loss_fn(prediction, y_target if targeted else y) # l(f(x'))
@@ -146,28 +164,50 @@ def _langevin_samples(model: Module,
 
         
         with torch.no_grad():
-            if step_norm == 2:
+            if norm == 2:
                 # .view() assumes batched image data as 4D tensor
                 
                 ## normalized gradient value (unit descent direction) * step size (step)
                 ## gradients = eta * grad_x' (l(f(x')))
                 
-                gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
+                gradients = _x_adv.grad * step / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
                     .view(-1, 1, 1, 1)
                 
 
-                gradients -= gamma*(x-_x_adv)
+                gradients += gamma*(x-_x_adv)
                 
                 ## gradient update
-                x_adv += step * gradients
+                x_adv += gradients
       
                 noise = ep *np.sqrt(2*step)*torch.randn_like(_x_adv)
                 x_adv += noise
 
                 
             else:
-                print('error')
+                gradients1 = _x_adv.grad.sign() * step
                 
+                #gradients2 = 0
+                #gradients2 = gamma*torch.sign(x-_x_adv)*indicator(torch.abs(x-_x_adv))
+                x_adv += gradients1
+                x_adv = project(x, x_adv, norm, gamma).clamp(*clamp)
+                delx = ep * np.sqrt(2 * step) * torch.randn_like(_x_adv)
+                x_adv += delx
+                if debug:
+                    print('inf norm of grad step:',infnorm(gradients1))
+                    print('inf norm of noise:',infnorm(delx))
+                    #print('inf norm of update:',infnorm(x-x_adv),'eps=',eps)
+                    
+                #x_adv += gradients2
+                
+                if debug:
+                    print('inf norm after projection update:',infnorm(x-x_adv))
+    #if debug:
+        #x_pre = x_adv.clone().detach().requires_grad_(False).to(x.device)
+        #x_adv = project(x, x_adv, norm, eps).clamp(*clamp)
+    #if debug:
+        #print('inf norm before project:',infnorm(x-x_pre),'eps=',eps)
+
+        #print('inf norm after project:',infnorm(x-x_adv),'eps=',eps)
     return x_adv.detach()#, lfx
 
 
@@ -183,7 +223,9 @@ def entropySmoothing(model: Module,
         random: bool = False,
         gamma: float = 1e-4,
         ep: float = 1e-6,
-        clamp: Tuple[float, float] = (0, 1)) -> torch.Tensor:
+        clamp: Tuple[float, float] = (0, 1),
+        debug: bool = False           ) -> torch.Tensor:
+        
     """Creates an adversarial sample using the Projected Gradient Descent Method
 
     This is a white-box attack.
@@ -205,7 +247,7 @@ def entropySmoothing(model: Module,
         x_adv: Adversarially perturbed version of x
     """
     return _langevin_samples(model=model, x=x, y=y, loss_fn=loss_fn, k=k, eps=eps, norm=norm, step=step, step_norm=2,
-                               y_target=y_target, random=random, gamma=gamma, ep=ep, clamp=clamp)
+                               y_target=y_target, random=random, gamma=gamma, ep=ep, clamp=clamp, debug=debug)
 
 def iterated_fgsm(model: Module,
                   x: torch.Tensor,
@@ -217,7 +259,9 @@ def iterated_fgsm(model: Module,
                   norm: Union[str, float],
                   y_target: torch.Tensor = None,
                   random: bool = False,
-                  clamp: Tuple[float, float] = (0, 1)) -> torch.Tensor:
+                  clamp: Tuple[float, float] = (0, 1),
+                  debug: bool = False
+                 ) -> torch.Tensor:
     """Creates an adversarial sample using the iterated Fast Gradient-Sign Method
 
     This is a white-box attack.
@@ -240,7 +284,7 @@ def iterated_fgsm(model: Module,
         x_adv: Adversarially perturbed version of x
     """
     return _iterative_gradient(model=model, x=x, y=y, loss_fn=loss_fn, k=k, eps=eps, norm=norm, step=step,
-                               step_norm='inf', y_target=y_target, random=random, clamp=clamp)
+                               step_norm='inf', y_target=y_target, random=random, clamp=clamp, debug=debug)
 
 
 def pgd(model: Module,

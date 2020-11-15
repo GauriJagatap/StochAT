@@ -69,8 +69,8 @@ class model_cnn(nn.Module):
                               nn.Conv2d(32, 64, 3, padding=1), nn.ReLU(),
                               nn.Conv2d(64, 64, 3, padding=1, stride=2), nn.ReLU(),
                               Flatten(),
-                              nn.Linear(7*7*64, 100), nn.ReLU(),
-                              nn.Linear(100, 10))
+                              nn.Linear(7*7*64, 200), nn.ReLU(),
+                              nn.Linear(200, 10))
     def forward(self,x):
         x = self.model_cnn(x)
         return x
