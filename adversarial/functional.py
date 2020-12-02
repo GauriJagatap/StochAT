@@ -169,19 +169,25 @@ def _langevin_samples(model: Module,
                 
                 ## normalized gradient value (unit descent direction) * step size (step)
                 ## gradients = eta * grad_x' (l(f(x')))
-                
-                gradients = _x_adv.grad * step / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
+                gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
                     .view(-1, 1, 1, 1)
                 
-
-                gradients += gamma*(x-_x_adv)
+                x_adv += step*gradients
+                x_adv = torch.clamp(x_adv,0,1)
+                if debug:
+                    print('2 norm after loss update:',torch.norm(x-x_adv)/16)
                 
-                ## gradient update
-                x_adv += gradients
-      
+                x_adv += gamma*(x-_x_adv)
+             
+ 
+                if debug:
+                    print('2 norm after projection update:',torch.norm(x-x_adv)/16)
+            
                 noise = ep *np.sqrt(2*step)*torch.randn_like(_x_adv)
                 x_adv += noise
-
+                
+                if debug:
+                    print('2 norm after noise update:',torch.norm(x-x_adv)/16)
                 
             else:
                 gradients1 = _x_adv.grad.sign() * step
