@@ -143,6 +143,7 @@ def _langevin_samples(model: Module,
                         gamma: float,
                         ep: float,
                         y_target: torch.Tensor = None,
+                        xp: torch.Tensor = None,
                         random: bool = False,
                         clamp: Tuple[float, float] = (0, 1),
                         debug: bool = False,
@@ -154,6 +155,8 @@ def _langevin_samples(model: Module,
     sb = np.sqrt(x_adv.shape[0])
     if random:
         x_adv = random_perturbation(x_adv, norm, eps) # initialize x' by adding bounded noise to x
+    else:
+        x_adv = xp.clone().detach()
         
     for i in range(k): # Langevin updates 
         _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
@@ -179,7 +182,8 @@ def _langevin_samples(model: Module,
                 if debug:
                     print('2 norm after noise update:',torch.norm(x-x_adv)/sb)
             else:
-                if not projector:
+                shrink = False ## ignore cw type update for now
+                if shrink:
                     x_delinf = shrinkage(x-_x_adv,gamma)
                     _x_adv += step2 * x_delinf
                 gradients1 = _x_adv.grad.sign() * step
@@ -216,6 +220,7 @@ def entropySmoothing(model: Module,
         step2: float,             
         norm: Union[str, float],
         y_target: torch.Tensor = None,
+        xp: torch.Tensor = None,
         random: bool = False,
         gamma: float = 1e-4,
         ep: float = 1e-6,
@@ -245,7 +250,7 @@ def entropySmoothing(model: Module,
         x_adv: Adversarially perturbed version of x
     """
     return _langevin_samples(model=model, x=x, y=y, loss_fn=loss_fn, k=k, eps=eps, norm=norm, step=step, step2=step2,
-                               y_target=y_target, random=random, gamma=gamma, ep=ep, clamp=clamp, debug=debug, projector=projector)
+                               y_target=y_target, xp=xp, random=random, gamma=gamma, ep=ep, clamp=clamp, debug=debug, projector=projector)
 
 def iterated_fgsm(model: Module,
                   x: torch.Tensor,
