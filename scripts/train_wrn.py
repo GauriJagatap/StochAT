@@ -98,10 +98,11 @@ def train(args):
 
     epochs = args.epochs
     dataset = 'CIFAR10' # [MNIST, CIFAR10]
-    transform = transforms.Compose([transforms.ToTensor(),])
+    train_transform = transforms.Compose([transforms.RandomRotation(degrees=5), transforms.RandomHorizontalFlip(p=0.5), transforms.ToTensor(),])
+    val_transform = transforms.Compose([transforms.ToTensor(),])
     bsz = args.batchsize
-    train = datasets.CIFAR10('../../data/CIFAR10', train=True, transform=transform, download=True)
-    val = datasets.CIFAR10('../../data/CIFAR10', train=False, transform=transform, download=True)
+    train = datasets.CIFAR10('../../data/CIFAR10', train=True, transform=train_transform, download=True)
+    val = datasets.CIFAR10('../../data/CIFAR10', train=False, transform=val_transform, download=True)
     
     train_loader = DataLoader(train, batch_size=bsz, shuffle=True, **kwargs)
     val_loader = DataLoader(val, batch_size=bsz, shuffle=False, **kwargs)
