@@ -157,6 +157,8 @@ def _langevin_samples(model: Module,
         x_adv = random_perturbation(x_adv, norm, eps) # initialize x' by adding bounded noise to x
     else:
         x_adv = xp.clone().detach()
+        if debug:
+            print(infnorm(x-xp))
         
     for i in range(k): # Langevin updates 
         _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
@@ -182,10 +184,10 @@ def _langevin_samples(model: Module,
                 if debug:
                     print('2 norm after noise update:',torch.norm(x-x_adv)/sb)
             else:
-                shrink = False ## ignore cw type update for now
-                if shrink:
-                    x_delinf = shrinkage(x-_x_adv,gamma)
-                    _x_adv += step2 * x_delinf
+                #shrink = False ## ignore cw type update for now
+                #if shrink:
+                #    x_delinf = shrinkage(x-_x_adv,gamma)
+                #    _x_adv += step2 * x_delinf
                 gradients1 = _x_adv.grad.sign() * step
                              
                 x_adv += gradients1
