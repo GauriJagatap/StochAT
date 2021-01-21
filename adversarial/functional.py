@@ -131,7 +131,7 @@ def _iterative_gradient(model: Module,
     return x_adv.detach()
 
 
-def _langevin_samples(model: Module,
+def _langevin_shrinkage(model: Module,
                         x: torch.Tensor,
                         y: torch.Tensor,
                         loss_fn: Callable,
@@ -211,15 +211,94 @@ def _langevin_samples(model: Module,
 
     return x_adv.detach()
 
+def _langevin_samples(model: Module,
+                        x: torch.Tensor,
+                        y: torch.Tensor,
+                        loss_fn: Callable,
+                        step: float,
+                        eps: float,
+                        norm: Union[str, float],
+                        ep: float = 1e-3,
+                        y_target: torch.Tensor = None,
+                        xp: torch.Tensor = None,
+                        random: bool = False,
+                        clamp: Tuple[float, float] = (0, 1),
+                        debug: bool = False,
+                        projector: bool = True
+                        ) -> torch.Tensor:
+    
+    x_adv = x.clone().detach().requires_grad_(True).to(x.device) # load x_adv (samples from p(x')) as x itself and modify it to form init 
+    targeted = y_target is not None
+    sb = np.sqrt(x_adv.shape[0])
+    
+    if random:
+        x_adv = random_perturbation(x_adv, norm, eps) # initialize x' by adding bounded noise to x
+    else:
+        x_adv = xp.clone().detach() # initialize by loading previous
+        if debug:
+            print('distance between previous estimate and true x:',infnorm(x-xp))
+        
+    #Single Langevin updates 
+    _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
+
+    prediction = model(_x_adv) # f(x')
+    loss = loss_fn(prediction, y_target if targeted else y) # l(f(x'))
+    loss.backward() # grad_x' ( l(f(x')) )
+    with torch.no_grad():
+        if norm == 2:
+            gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
+                    .view(-1, 1, 1, 1)                
+            x_adv += step*gradients
+            if debug:
+                print('2 norm after loss update:',torch.norm(x-x_adv)/sb)
+                
+            x_adv += gamma*(x-_x_adv)             
+            if debug:
+                print('2 norm after projection update:',torch.norm(x-x_adv)/sb)
+            
+            noise = ep *np.sqrt(2*step)*torch.randn_like(_x_adv)
+            x_adv += noise
+                
+            if debug:
+                print('2 norm after noise update:',torch.norm(x-x_adv)/sb)
+        elif norm == 'inf':
+                
+            gradients = _x_adv.grad.sign() * step
+                             
+            x_adv += gradients
+            if debug:
+                print('inf norm of grad step:',infnorm(x-x_adv))
+               
+            delx = ep * np.sqrt(2 * step) * torch.randn_like(_x_adv)
+            x_adv += delx
+            if debug:
+                print('inf norm of noise:',infnorm(delx))
+
+    if debug:
+        x_pre = x_adv.clone().detach().requires_grad_(False).to(x.device)
+        if norm == 'inf':
+            print('inf norm before project:',infnorm(x-x_pre),'eps=',eps)
+        elif norm == 2:
+            print('inf norm before project:',torch.norm(x-x_pre)/sb,'eps=',eps)            
+            
+    if projector:
+        x_adv = project(x, x_adv, norm, eps).clamp(*clamp)
+        if debug:
+            if norm == 'inf':
+                print('inf norm after project:',infnorm(x-x_adv),'eps=',eps)
+            elif norm == 2:
+                print('2 norm after project:',torch.norm(x-x_adv)/sb,'eps=',eps)               
+    else:
+        x_adv = x_adv.clamp(*clamp)
+
+    return x_adv.detach()
 
 def entropySmoothing(model: Module,
         x: torch.Tensor,
         y: torch.Tensor,
         loss_fn: Callable,
-        k: int,
         step: float,
         eps: float,
-        step2: float,             
         norm: Union[str, float],
         y_target: torch.Tensor = None,
         xp: torch.Tensor = None,
@@ -251,8 +330,8 @@ def entropySmoothing(model: Module,
     Returns:
         x_adv: Adversarially perturbed version of x
     """
-    return _langevin_samples(model=model, x=x, y=y, loss_fn=loss_fn, k=k, eps=eps, norm=norm, step=step, step2=step2,
-                               y_target=y_target, xp=xp, random=random, gamma=gamma, ep=ep, clamp=clamp, debug=debug, projector=projector)
+    return _langevin_samples(model=model, x=x, y=y, loss_fn=loss_fn, eps=eps, norm=norm, step=step,
+                               y_target=y_target, xp=xp, random=random, ep=ep, clamp=clamp, debug=debug, projector=projector)
 
 def iterated_fgsm(model: Module,
                   x: torch.Tensor,
