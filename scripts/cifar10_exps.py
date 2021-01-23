@@ -75,6 +75,10 @@ from trades import trades_loss
 from torch.autograd import Variable
 from torch.optim.lr_scheduler import StepLR
 
+if torch.cuda.is_available():
+    DEVICE = 'cuda'
+else:
+    DEVICE = 'cpu'
 
 def eval_train(model, device, train_loader):
     model.eval()
@@ -117,12 +121,13 @@ def _pgd_whitebox(model,
                   y,
                   epsilon=0.031,
                   num_steps=20,
-                  step_size=0.003, 
+                  step_size=0.003,
+                  random=True
                   ):
     out = model(X)
     err = (out.data.max(1)[1] != y.data).float().sum()
     X_pgd = Variable(X.data, requires_grad=True)
-    if args['random']:
+    if random:
         random_noise = torch.FloatTensor(*X_pgd.shape).uniform_(-epsilon, epsilon).to(DEVICE)
         X_pgd = Variable(X_pgd.data + random_noise, requires_grad=True)
 
@@ -142,7 +147,7 @@ def _pgd_whitebox(model,
     #print('err pgd (white-box): ', err_pgd)
     return err, err_pgd
 
-def eval_adv_test_whitebox(model, device, test_loader):
+def eval_adv_test_whitebox(model, device, test_loader, args):
     """
     evaluate model by white-box attack
     """
@@ -154,7 +159,7 @@ def eval_adv_test_whitebox(model, device, test_loader):
         data, target = data.to(device), target.to(device)
         # pgd attack
         X, y = Variable(data, requires_grad=True), Variable(target)
-        err_natural, err_robust = _pgd_whitebox(model, X, y, epsilon=args.epsilon, step_size=args.step_size)
+        err_natural, err_robust = _pgd_whitebox(model, X, y, epsilon=args.epsilon, step_size=args.step_size, random=args.random)
         robust_err_total += err_robust
         natural_err_total += err_natural
     print('natural_acc_total: ', 100-natural_err_total.item()/100)
@@ -242,16 +247,13 @@ def build_parser():
     parser.add_argument('--modelpath', '-mpath', help='Path to model', required=True)
     parser.add_argument('--epsilon', '-eps', default=0.031, type=float, help='Epsilon value for defense')
     parser.add_argument('--step_size', '-ss', default=0.007, type=float, help='Step size')
+    parser.add_argument('--random', action='store_true', help='random start')
     #parser.add_argument
     return parser
 
 def main():
 
     args = build_parser().parse_args()
-    if torch.cuda.is_available():
-        DEVICE = 'cuda'
-    else:
-        DEVICE = 'cpu'
 
     kwargs = {'num_workers': 4, 'pin_memory': True}
 
@@ -360,15 +362,15 @@ def main():
             print('================================================================')
             eval_train(model_SATInf, DEVICE, train_loader)
             #eval_test(model_SATInf, DEVICE, val_loader)
-            eval_adv_test_whitebox(model_SATInf, DEVICE, val_loader)            
+            eval_adv_test_whitebox(model_SATInf, DEVICE, val_loader, args)            
             print('================================================================')
         #scheduler.step()
 
 
         # save checkpoint
-        if (epoch) % args['save_freq'] == 0:
+        if (epoch) % args.save_freq == 0:
             torch.save(model_SATInf.state_dict(),
-                    os.path.join(model_dir, 'model-nn-epoch{}.pt'.format(epoch)))
+                    os.path.join(args.outdir, 'model-nn-epoch{}.pt'.format(epoch)))
 
     ## save model
     modelname = args.outdir+'/'+NetName+'_SATInf_ep'+str(epoch)+'_lr'+str(lr_init)+'.pt'
