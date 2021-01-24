@@ -20,7 +20,7 @@ from foolbox.models import PyTorchModel
 from foolbox.attacks import LinfDeepFoolAttack, LinfProjectedGradientDescentAttack, L2ProjectedGradientDescentAttack, L2CarliniWagnerAttack, L2DeepFoolAttack
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
+#device = torch.device('cpu')
 class LinfCarliniWagnerAttack(L2CarliniWagnerAttack):
     """
     Implements Carlini-Wagner Linf Attack
@@ -87,6 +87,7 @@ def main():
     np.save('epsilons'+args.outfile, epsilons)
 
 
-
+if __name__ == '__main__':
+    main()
 
 
