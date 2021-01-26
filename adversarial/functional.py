@@ -96,7 +96,8 @@ def _iterative_gradient(model: Module,
 
     if random:
         x_adv = random_perturbation(x_adv, norm, eps)
-
+        if debug:
+            print(torch.norm(x-x_adv)/np.sqrt(128))
     for i in range(k):
         _x_adv = x_adv.clone().detach().requires_grad_(True)
 
@@ -110,6 +111,7 @@ def _iterative_gradient(model: Module,
                                     
             else:
                 # .view() assumes batched image data as 4D tensor
+                #print(torch.norm(_x_adv.grad))
                 gradients = _x_adv.grad * step / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
                     .view(-1, 1, 1, 1)
 
@@ -123,11 +125,11 @@ def _iterative_gradient(model: Module,
                 x_adv += gradients
                  
         if debug:
-            print('inf norm of update:',infnorm(x-x_adv),'eps=',eps)
+            print('2 norm of update:',torch.norm(x-x_adv)/np.sqrt(128),'eps=',eps)
         # Project back into l_norm ball and correct range
         x_adv = project(x, x_adv, norm, eps).clamp(*clamp)
         if debug:
-            print('inf norm of project:',infnorm(x-x_adv),'eps=',eps)
+            print('2 norm of project:',torch.norm(x-x_adv)/np.sqrt(128),'eps=',eps)
     return x_adv.detach()
 
 
@@ -168,10 +170,12 @@ def _langevin_shrinkage(model: Module,
         loss.backward() # grad_x' ( l(f(x')) )
         with torch.no_grad():
             if norm == 2:
-                gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
+                gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(2, dim=-1)\
                     .view(-1, 1, 1, 1)                
                 x_adv += step*gradients
+                
                 if debug:
+                    print('gradient:',torch.norm(gradients))
                     print('2 norm after loss update:',torch.norm(x-x_adv)/sb)
                 
                 x_adv += gamma*(x-_x_adv)             
@@ -224,7 +228,8 @@ def _langevin_samples(model: Module,
                         random: bool = False,
                         clamp: Tuple[float, float] = (0, 1),
                         debug: bool = False,
-                        projector: bool = True
+                        projector: bool = True,
+                        gamma: float = 1e-4
                         ) -> torch.Tensor:
     
     x_adv = x.clone().detach().requires_grad_(True).to(x.device) # load x_adv (samples from p(x')) as x itself and modify it to form init 
@@ -240,19 +245,20 @@ def _langevin_samples(model: Module,
         
     #Single Langevin updates 
     _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
-
     prediction = model(_x_adv) # f(x')
     loss = loss_fn(prediction, y_target if targeted else y) # l(f(x'))
     loss.backward() # grad_x' ( l(f(x')) )
     with torch.no_grad():
         if norm == 2:
-            gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
-                    .view(-1, 1, 1, 1)                
+            gradients = _x_adv.grad * 1
+            #gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(2, dim=-1)\
+                    #.view(-1, 1, 1, 1)                
             x_adv += step*gradients
             if debug:
+                print('gradients',torch.norm(gradients))
                 print('2 norm after loss update:',torch.norm(x-x_adv)/sb)
                 
-            x_adv += gamma*(x-_x_adv)             
+            x_adv += gamma*(-x+_x_adv)             
             if debug:
                 print('2 norm after projection update:',torch.norm(x-x_adv)/sb)
             
@@ -279,7 +285,7 @@ def _langevin_samples(model: Module,
         if norm == 'inf':
             print('inf norm before project:',infnorm(x-x_pre),'eps=',eps)
         elif norm == 2:
-            print('inf norm before project:',torch.norm(x-x_pre)/sb,'eps=',eps)            
+            print('2 norm before project:',torch.norm(x-x_pre)/sb,'eps=',eps)            
             
     if projector:
         x_adv = project(x, x_adv, norm, eps).clamp(*clamp)
@@ -290,6 +296,11 @@ def _langevin_samples(model: Module,
                 print('2 norm after project:',torch.norm(x-x_adv)/sb,'eps=',eps)               
     else:
         x_adv = x_adv.clamp(*clamp)
+        if debug:
+            if norm == 'inf':
+                print('inf norm after clamp:',infnorm(x-x_adv),'eps=',eps)
+            elif norm == 2:
+                print('2 norm after clamp:',torch.norm(x-x_adv)/sb,'eps=',eps)          
 
     return x_adv.detach()
 
@@ -331,7 +342,7 @@ def entropySmoothing(model: Module,
         x_adv: Adversarially perturbed version of x
     """
     return _langevin_samples(model=model, x=x, y=y, loss_fn=loss_fn, eps=eps, norm=norm, step=step,
-                               y_target=y_target, xp=xp, random=random, ep=ep, clamp=clamp, debug=debug, projector=projector)
+                               y_target=y_target, xp=xp, random=random, ep=ep, clamp=clamp, debug=debug, projector=projector, gamma=gamma)
 
 def iterated_fgsm(model: Module,
                   x: torch.Tensor,
@@ -381,7 +392,9 @@ def pgd(model: Module,
         norm: Union[str, float],
         y_target: torch.Tensor = None,
         random: bool = False,
-        clamp: Tuple[float, float] = (0, 1)) -> torch.Tensor:
+        clamp: Tuple[float, float] = (0, 1),
+        debug: bool =False
+       ) -> torch.Tensor:
     """Creates an adversarial sample using the Projected Gradient Descent Method
 
     This is a white-box attack.
@@ -402,8 +415,8 @@ def pgd(model: Module,
     Returns:
         x_adv: Adversarially perturbed version of x
     """
-    return _iterative_gradient(model=model, x=x, y=y, loss_fn=loss_fn, k=k, eps=eps, norm=norm, step=step, step_norm=2,
-                               y_target=y_target, random=random, clamp=clamp)
+    return _iterative_gradient(model=model, x=x, y=y, loss_fn=loss_fn, k=k, eps=eps, norm=norm, step=step, step_norm=norm,
+                               y_target=y_target, random=random, clamp=clamp, debug=debug)
 
 
 def boundary(model: Module,
