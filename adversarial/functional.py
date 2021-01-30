@@ -32,19 +32,6 @@ def fgsm(model: Module,
          eps: float,
          clamp: Tuple[float, float] = (0, 1)) -> torch.Tensor:
     """Creates an adversarial sample using the Fast Gradient-Sign Method (FGSM)
-
-    This is a white-box attack.
-
-    Args:
-        model: Model
-        x: Batch of samples
-        y: Corresponding labels
-        loss_fn: Loss function to maximise
-        eps: Size of adversarial perturbation
-        clamp: Max and minimum values of elements in the samples i.e. (0, 1) for MNIST
-
-    Returns:
-        x_adv: Adversarially perturbed version of x
     """
     x.requires_grad = True
     model.train()
@@ -56,7 +43,7 @@ def fgsm(model: Module,
 
     return x_adv
 
-
+# for PGD
 def _iterative_gradient(model: Module,
                         x: torch.Tensor,
                         y: torch.Tensor,
@@ -72,32 +59,16 @@ def _iterative_gradient(model: Module,
                         debug: bool = False
                        ) -> torch.Tensor:
     """Base function for PGD and iterated FGSM
-
-    Args:
-        model: Model
-        x: Batch of samples
-        y: Corresponding labels
-        loss_fn: Loss function to maximise
-        k: Number of iterations to make
-        step: Size of step to make at each iteration
-        eps: Maximum size of adversarial perturbation, larger perturbations will be projected back into the
-            L_norm ball
-        norm: Type of norm
-        step_norm: 2 for PGD, 'inf' for iterated FGSM
-        y_target:
-        random: Whether to start Iterated FGSM within a random point in the l_norm ball
-        clamp: Max and minimum values of elements in the samples i.e. (0, 1) for MNIST
-
     Returns:
         x_adv: Adversarially perturbed version of x
     """
     x_adv = x.clone().detach().requires_grad_(True).to(x.device)
     targeted = y_target is not None
-
+    sb = np.sqrt(x.shape[0])
     if random:
         x_adv = random_perturbation(x_adv, norm, eps)
         if debug:
-            print(torch.norm(x-x_adv)/np.sqrt(128))
+            print(torch.norm(x-x_adv)/sb)
     for i in range(k):
         _x_adv = x_adv.clone().detach().requires_grad_(True)
 
@@ -110,110 +81,31 @@ def _iterative_gradient(model: Module,
                 gradients = _x_adv.grad.sign() * step
                                     
             else:
-                # .view() assumes batched image data as 4D tensor
-                #print(torch.norm(_x_adv.grad))
                 gradients = _x_adv.grad * step / _x_adv.grad.view(_x_adv.shape[0], -1).norm(step_norm, dim=-1)\
                     .view(-1, 1, 1, 1)
 
             if targeted:
-                # Targeted: Gradient descent with on the loss of the (incorrect) target label
-                # w.r.t. the model parameters
                 x_adv -= gradients
             else:
-                # Untargeted: Gradient ascent on the loss of the correct label w.r.t.
-                # the model parameters
+                # Untargeted: Gradient ascent
                 x_adv += gradients
                  
         if debug:
-            print('2 norm of update:',torch.norm(x-x_adv)/np.sqrt(128),'eps=',eps)
+            if step_norm == 2:
+                print('2 norm of update:',torch.norm(x-x_adv)/sb,'eps=',eps)
+            elif step_norm == 'inf':    
+                print('inf norm of update:',infnorm(x-x_adv),'eps=',eps)
+                
         # Project back into l_norm ball and correct range
         x_adv = project(x, x_adv, norm, eps).clamp(*clamp)
         if debug:
-            print('2 norm of project:',torch.norm(x-x_adv)/np.sqrt(128),'eps=',eps)
+            if step_norm == 2:
+                print('2 norm of update:',torch.norm(x-x_adv)/sb,'eps=',eps)
+            elif step_norm == 'inf':    
+                print('inf norm of update:',infnorm(x-x_adv),'eps=',eps)
+             
     return x_adv.detach()
 
-
-def _langevin_shrinkage(model: Module,
-                        x: torch.Tensor,
-                        y: torch.Tensor,
-                        loss_fn: Callable,
-                        k: int,
-                        step: float,
-                        eps: float,
-                        norm: Union[str, float],
-                        step2: float,
-                        gamma: float,
-                        ep: float,
-                        y_target: torch.Tensor = None,
-                        xp: torch.Tensor = None,
-                        random: bool = False,
-                        clamp: Tuple[float, float] = (0, 1),
-                        debug: bool = False,
-                        projector: bool = True
-                        ) -> torch.Tensor:
-    
-    x_adv = x.clone().detach().requires_grad_(True).to(x.device) # load x_adv (samples from p(x')) as x itself and modify it to form init 
-    targeted = y_target is not None
-    sb = np.sqrt(x_adv.shape[0])
-    if random:
-        x_adv = random_perturbation(x_adv, norm, eps) # initialize x' by adding bounded noise to x
-    else:
-        x_adv = xp.clone().detach()
-        if debug:
-            print(infnorm(x-xp))
-        
-    for i in range(k): # Langevin updates 
-        _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
-
-        prediction = model(_x_adv) # f(x')
-        loss = loss_fn(prediction, y_target if targeted else y) # l(f(x'))
-        loss.backward() # grad_x' ( l(f(x')) )
-        with torch.no_grad():
-            if norm == 2:
-                gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(2, dim=-1)\
-                    .view(-1, 1, 1, 1)                
-                x_adv += step*gradients
-                
-                if debug:
-                    print('gradient:',torch.norm(gradients))
-                    print('2 norm after loss update:',torch.norm(x-x_adv)/sb)
-                
-                x_adv += gamma*(x-_x_adv)             
-                if debug:
-                    print('2 norm after projection update:',torch.norm(x-x_adv)/sb)
-            
-                noise = ep *np.sqrt(2*step)*torch.randn_like(_x_adv)
-                x_adv += noise
-                
-                if debug:
-                    print('2 norm after noise update:',torch.norm(x-x_adv)/sb)
-            else:
-                #shrink = False ## ignore cw type update for now
-                #if shrink:
-                #    x_delinf = shrinkage(x-_x_adv,gamma)
-                #    _x_adv += step2 * x_delinf
-                gradients1 = _x_adv.grad.sign() * step
-                             
-                x_adv += gradients1
-                if debug:
-                    print('inf norm of grad step:',infnorm(x-x_adv))
-               
-                delx = ep * np.sqrt(2 * step) * torch.randn_like(_x_adv)
-                x_adv += delx
-                if debug:
-                    print('inf norm of noise:',infnorm(delx))
-
-    if debug:
-        x_pre = x_adv.clone().detach().requires_grad_(False).to(x.device)
-        print('inf norm before project:',infnorm(x-x_pre),'eps=',eps)
-    if projector:
-        x_adv = project(x, x_adv, norm, eps).clamp(*clamp)
-        if debug:
-            print('inf norm after project:',infnorm(x-x_adv),'eps=',eps)
-    else:
-        x_adv = x_adv.clamp(*clamp)
-
-    return x_adv.detach()
 
 def _langevin_samples(model: Module,
                         x: torch.Tensor,
@@ -231,17 +123,15 @@ def _langevin_samples(model: Module,
                         projector: bool = True,
                         gamma: float = 1e-4
                         ) -> torch.Tensor:
-    
-    x_adv = x.clone().detach().requires_grad_(True).to(x.device) # load x_adv (samples from p(x')) as x itself and modify it to form init 
+    breakflag = False
+    x_adv = x.clone().detach().requires_grad_(True).to(x.device) #load x_adv (samples from p(x')) as x itself and modify it to form init 
     targeted = y_target is not None
     sb = np.sqrt(x_adv.shape[0])
     
     if random:
         x_adv = random_perturbation(x_adv, norm, eps) # initialize x' by adding bounded noise to x
     else:
-        x_adv = xp.clone().detach() # initialize by loading previous
-        if debug:
-            print('distance between previous estimate and true x:',infnorm(x-xp))
+        x_adv = xp.clone().detach() # initialize by loading previous           
         
     #Single Langevin updates 
     _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
@@ -250,15 +140,20 @@ def _langevin_samples(model: Module,
     loss.backward() # grad_x' ( l(f(x')) )
     with torch.no_grad():
         if norm == 2:
-            gradients = _x_adv.grad * 1
-            #gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(2, dim=-1)\
-                    #.view(-1, 1, 1, 1)                
+            #print(torch.norm(_x_adv.grad))    
+            gradx = _x_adv.grad 
+            if torch.norm(gradx) < 5e-4:
+                breakflag = True
+                print('vanishing gradients: change lr')
+                
+            gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(2, dim=-1)\
+                    .view(-1, 1, 1, 1)                
             x_adv += step*gradients
+
             if debug:
-                print('gradients',torch.norm(gradients))
                 print('2 norm after loss update:',torch.norm(x-x_adv)/sb)
                 
-            x_adv += gamma*(-x+_x_adv)             
+            x_adv += gamma*(x-_x_adv)             
             if debug:
                 print('2 norm after projection update:',torch.norm(x-x_adv)/sb)
             
@@ -268,7 +163,6 @@ def _langevin_samples(model: Module,
             if debug:
                 print('2 norm after noise update:',torch.norm(x-x_adv)/sb)
         elif norm == 'inf':
-                
             gradients = _x_adv.grad.sign() * step
                              
             x_adv += gradients
@@ -294,15 +188,15 @@ def _langevin_samples(model: Module,
                 print('inf norm after project:',infnorm(x-x_adv),'eps=',eps)
             elif norm == 2:
                 print('2 norm after project:',torch.norm(x-x_adv)/sb,'eps=',eps)               
-    else:
-        x_adv = x_adv.clamp(*clamp)
-        if debug:
-            if norm == 'inf':
-                print('inf norm after clamp:',infnorm(x-x_adv),'eps=',eps)
-            elif norm == 2:
-                print('2 norm after clamp:',torch.norm(x-x_adv)/sb,'eps=',eps)          
+    #else:
+    #    x_adv = x_adv.clamp(*clamp)
+    #    if debug:
+    #        if norm == 'inf':
+    #            print('inf norm after clamp:',infnorm(x-x_adv),'eps=',eps)
+    #        elif norm == 2:
+    #            print('2 norm after clamp:',torch.norm(x-x_adv)/sb,'eps=',eps)          
 
-    return x_adv.detach()
+    return x_adv.detach(), breakflag
 
 def entropySmoothing(model: Module,
         x: torch.Tensor,
@@ -415,7 +309,7 @@ def pgd(model: Module,
     Returns:
         x_adv: Adversarially perturbed version of x
     """
-    return _iterative_gradient(model=model, x=x, y=y, loss_fn=loss_fn, k=k, eps=eps, norm=norm, step=step, step_norm=norm,
+    return _iterative_gradient(model=model, x=x, y=y, loss_fn=loss_fn, k=k, eps=eps, norm=norm, step=step, step_norm='inf',
                                y_target=y_target, random=random, clamp=clamp, debug=debug)
 
 
@@ -619,3 +513,88 @@ def local_search(model: Module,
 
     # Attack failed, return sample with lowest score of correct class
     return x_adv
+
+
+'''
+def _langevin_shrinkage(model: Module,
+                        x: torch.Tensor,
+                        y: torch.Tensor,
+                        loss_fn: Callable,
+                        k: int,
+                        step: float,
+                        eps: float,
+                        norm: Union[str, float],
+                        step2: float,
+                        gamma: float,
+                        ep: float,
+                        y_target: torch.Tensor = None,
+                        xp: torch.Tensor = None,
+                        random: bool = False,
+                        clamp: Tuple[float, float] = (0, 1),
+                        debug: bool = False,
+                        projector: bool = True
+                        ) -> torch.Tensor:
+    
+    x_adv = x.clone().detach().requires_grad_(True).to(x.device) # load x_adv (samples from p(x')) as x itself and modify it to form init 
+    targeted = y_target is not None
+    sb = np.sqrt(x_adv.shape[0])
+    if random:
+        x_adv = random_perturbation(x_adv, norm, eps) # initialize x' by adding bounded noise to x
+    else:
+        x_adv = xp.clone().detach()
+        if debug:
+            print(infnorm(x-xp))
+        
+    for i in range(k): # Langevin updates 
+        _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' 
+
+        prediction = model(_x_adv) # f(x')
+        loss = loss_fn(prediction, y_target if targeted else y) # l(f(x'))
+        loss.backward() # grad_x' ( l(f(x')) )
+        with torch.no_grad():
+            if norm == 2:
+                gradients = _x_adv.grad * 1 / _x_adv.grad.view(_x_adv.shape[0], -1).norm(2, dim=-1)\
+                    .view(-1, 1, 1, 1)                
+                x_adv += step*gradients
+                
+                if debug:
+                    print('gradient:',torch.norm(gradients))
+                    print('2 norm after loss update:',torch.norm(x-x_adv)/sb)
+                
+                x_adv += gamma*(x-_x_adv)             
+                if debug:
+                    print('2 norm after projection update:',torch.norm(x-x_adv)/sb)
+            
+                noise = ep *np.sqrt(2*step)*torch.randn_like(_x_adv)
+                x_adv += noise
+                
+                if debug:
+                    print('2 norm after noise update:',torch.norm(x-x_adv)/sb)
+            else:
+                #shrink = False ## ignore cw type update for now
+                #if shrink:
+                #    x_delinf = shrinkage(x-_x_adv,gamma)
+                #    _x_adv += step2 * x_delinf
+                gradients1 = _x_adv.grad.sign() * step
+                             
+                x_adv += gradients1
+                if debug:
+                    print('inf norm of grad step:',infnorm(x-x_adv))
+               
+                delx = ep * np.sqrt(2 * step) * torch.randn_like(_x_adv)
+                x_adv += delx
+                if debug:
+                    print('inf norm of noise:',infnorm(delx))
+
+    if debug:
+        x_pre = x_adv.clone().detach().requires_grad_(False).to(x.device)
+        print('inf norm before project:',infnorm(x-x_pre),'eps=',eps)
+    if projector:
+        x_adv = project(x, x_adv, norm, eps).clamp(*clamp)
+        if debug:
+            print('inf norm after project:',infnorm(x-x_adv),'eps=',eps)
+    else:
+        x_adv = x_adv.clamp(*clamp)
+
+    return x_adv.detach()
+'''
