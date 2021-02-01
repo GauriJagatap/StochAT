@@ -73,7 +73,8 @@ def _iterative_gradient(model: Module,
         _x_adv = x_adv.clone().detach().requires_grad_(True)
 
         prediction = model(_x_adv)
-        loss = loss_fn(prediction, y_target if targeted else y)
+        with torch.enable_grad():
+            loss = loss_fn(prediction, y_target if targeted else y)
         loss.backward()
 
         with torch.no_grad():
