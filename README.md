@@ -1,6 +1,6 @@
 Scripts and notebooks for experiments on ATENT.
 
-notebooks/ folder contains [corresponding figures and tables]:
+notebooks/ folder contains [corresponding figures and tables in paper]:
 1. cifar10_exps_linf.ipynb (CIFAR10 experiments on WideResNet34 for L-Inf attacks) [Table 3 and Figure 3]
 2. cifar10_exps_l2.ipynb (CIFAR10 experiments on ResNet18 or ResNer20 for L-2 attacks) [Table 4 and Table 5]
 3. mnist_exps_linf.ipynb (MNIST experiments on small CNN for L-Inf attacks) [Table 2]
