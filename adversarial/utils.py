@@ -2,7 +2,8 @@ from typing import Union, Tuple
 from torch.nn import Module
 import numpy as np
 import torch
-
+import torch.nn.functional as F
+from torch import nn
 
 def project(x: torch.Tensor, x_adv: torch.Tensor, norm: Union[str, int], eps: float) -> torch.Tensor:
     """Projects x_adv into the l_norm ball around x
@@ -117,3 +118,55 @@ def accuracy(output, target, topk=(1,)):
         correct_k = correct[:k].view(-1).float().sum(0)
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
+
+def eval_train(model, device, train_loader):
+    model.eval()
+    train_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in train_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            train_loss += F.cross_entropy(output, target, size_average=False).item()
+            pred = output.max(1, keepdim=True)[1]
+            correct += pred.eq(target.view_as(pred)).sum().item()
+    train_loss /= len(train_loader.dataset)
+    print('Training: Average loss: {:.4f}, Accuracy: {}/{} ({:.0f}%)'.format(
+        train_loss, correct, len(train_loader.dataset),
+        100. * correct / len(train_loader.dataset)))
+    training_accuracy = correct / len(train_loader.dataset)
+    return train_loss, training_accuracy
+
+def eval_test(model, device, test_loader):
+    model.eval()
+    test_loss = 0
+    correct = 0
+    with torch.no_grad():
+        for data, target in test_loader:
+            data, target = data.to(device), target.to(device)
+            output = model(data)
+            test_loss += F.cross_entropy(output, target, size_average=False).item()
+            pred = output.max(1, keepdim=True)[1]
+            correct += pred.eq(target.view_as(pred)).sum().item()
+    test_loss /= len(test_loader.dataset)
+    print('Test: Average loss: {:.4f}, Accuracy: {}/{} ({:.2f}%)'.format(
+        test_loss, correct, len(test_loader.dataset),
+        100. * correct / len(test_loader.dataset)))
+    test_accuracy = correct / len(test_loader.dataset)
+    return test_loss, test_accuracy
+
+def infnorm(x):
+    infn = torch.max(torch.abs(x.detach().cpu()))
+    return infn
+
+def train_adversarial(method,model, device, train_loader, optimizer, epoch,adversary,L,step,eps,norm):
+    totalcorrect = 0
+    for batch_idx, (data, target) in enumerate(train_loader):
+        data, target = data.to(device), target.to(device)
+        ypred = model(data)
+        
+        sgd_loss = nn.CrossEntropyLoss()
+        # calculate robust loss per batch
+        loss, correct = method(model,optimizer,sgd_loss,data,target,epoch,adversary,L,step,eps,norm)
+        totalcorrect += correct
+    print('robust train accuracy:',100*totalcorrect/len(train_loader.dataset))   
