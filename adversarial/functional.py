@@ -24,19 +24,19 @@ def _langevin_samples(model: Module,
                         gamma: float = 1e-4
                         ) -> torch.Tensor:
     breakflag = False
-    
-    sb = np.sqrt(x_adv.shape[0])
-    
+        
     if random:
         x_adv = x.clone().detach().requires_grad_(True).to(x.device) #initialize x' as x
         x_adv = random_perturbation(x_adv, norm, eps) # initialize x' by adding bounded noise to x
     else:
         x_adv = xp.clone().detach() # initialize by loading previous           
-        
+
+    sb = np.sqrt(x_adv.shape[0])
+
     #Single Langevin updates 
     _x_adv = x_adv.clone().detach().requires_grad_(True) # _x_adv is current iterate of x' (X'^k)
     prediction = model(_x_adv) # f(x')
-    loss = loss_fn(prediction, y_target if targeted else y) # l(f(x'))
+    loss = loss_fn(prediction, y) # l(f(x'))
     loss.backward() # grad_x' ( l(f(x')) )
     with torch.no_grad():
         if norm == 2:
