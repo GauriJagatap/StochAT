@@ -170,3 +170,21 @@ def train_adversarial(method,model, device, train_loader, optimizer, epoch,adver
         loss, correct = method(model,optimizer,sgd_loss,data,target,epoch,adversary,L,step,eps,norm)
         totalcorrect += correct
     print('robust train accuracy:',100*totalcorrect/len(train_loader.dataset))   
+    
+    
+def adversarial_training(model, optimiser, loss_fn, x, y, epoch, adversary, k, step, eps, norm):
+    """Performs a single update against a specified adversary"""
+    model.train()
+    
+    # Adversial perturbation
+    x_adv = adversary(model, x, y, loss_fn, k=k, step=step, eps=eps, norm=norm, random=True)
+    #print(torch.norm(x-x_adv)/np.sqrt(args['batch_size']))
+    optimiser.zero_grad()
+    y_pred = model(x_adv)
+    pred = y_pred.max(1, keepdim=True)[1]
+    correct = pred.eq(y.view_as(pred)).sum().item()
+    loss = loss_fn(y_pred, y)
+    loss.backward()
+    optimiser.step()
+    #print('% correct:',100*correct/args['batch_size'])
+    return loss, correct    
