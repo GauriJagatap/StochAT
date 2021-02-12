@@ -1,4 +1,4 @@
-Scripts and notebooks for experiments on ATENT.
+Important scripts and notebooks for experiments on ATENT.
 
 notebooks/ folder contains [corresponding figures and tables in paper]:
 1. cifar10_exps_linf.ipynb (CIFAR10 experiments on WideResNet34 for L-Inf attacks) [Table 3 and Figure 3]
